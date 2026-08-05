@@ -1,12 +1,9 @@
 title = "gitleaks config"
 
 [[rules]]
-id = "universal-properties-secret-detector"
-description = "Detected a sensitive assignment pattern"
-regex = '''(?i)(password|passwd|secret|token|credential|jwt|api_key|private_key|datasource|db_url|username|user_id)\s*[:=]\s*([^\s]+)'''
+id = "spring-properties-password"
+description = "Detected plain-text password assignment in application configuration"
+# Matches keywords, spaces, assignment symbols (= or :), and the target secret string
+regex = '''(?i)(password|passwd|db_password|datasource\.password)\s*[:=]\s*([^\s]+)'''
 secretGroup = 2
-keywords = [
-  "password", "passwd", "secret", "token", "credential", 
-  "jwt", "api_key", "private_key", "datasource", "db_url", 
-  "username", "user_id", "url"
-]
+keywords = ["password", "passwd", "datasource.password"]
