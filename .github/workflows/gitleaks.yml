@@ -1,20 +1,31 @@
-name: gitleaks
+name: Gitleaks
+
 on:
-  pull_request:
   push:
-  workflow_dispatch:
+  pull_request:
 
 jobs:
   scan:
-    name: gitleaks
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Crucial: fetches all history so Gitleaks can scan prior commits
 
-      - name: Run Gitleaks Action
-        uses: gitleaks/gitleaks-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUBTOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/repo \
+            zricethezav/gitleaks:latest detect \
+            --source=/repo \
+            --verbose \
+            --report-format=json \
+            --report-path=/repo/gitleaks-report.json
+
+      - name: Upload Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
