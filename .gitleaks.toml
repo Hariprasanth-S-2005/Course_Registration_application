@@ -1,15 +1,12 @@
-# .gitleaks.toml
+title = "gitleaks config"
+
 [[rules]]
-id = "universal-key-value-leak-detector"
-description = "Detected a sensitive configuration assignment or hardcoded secret"
-# Catches keys like password, token, url, secret, jwt, key, key_id, etc.
-regex = '''(?i)(password|passwd|secret|token|credential|jwt|api_key|private_key|datasource|db_url|username|user_id)\s*[:=]\s*['"]?([^\s'"]+)['"]?'''
+id = "universal-properties-secret-detector"
+description = "Detected a sensitive assignment pattern"
+regex = '''(?i)(password|passwd|secret|token|credential|jwt|api_key|private_key|datasource|db_url|username|user_id)\s*[:=]\s*([^\s]+)'''
 secretGroup = 2
 keywords = [
   "password", "passwd", "secret", "token", "credential", 
   "jwt", "api_key", "private_key", "datasource", "db_url", 
   "username", "user_id", "url"
 ]
-
-# Set a low entropy threshold to force catch simple words like "root" or "MySQL123"
-entropy = 2.0
