@@ -12,10 +12,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetches full history to scan prior commits
+          fetch-depth: 0
 
       - name: Run Gitleaks Action
         uses: gitleaks/gitleaks-action@v2
-        # Note: v2 is highly recommended for personal repos to avoid v3 org-licensing prompts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml  # Forces Gitleaks to prioritize your rule file
