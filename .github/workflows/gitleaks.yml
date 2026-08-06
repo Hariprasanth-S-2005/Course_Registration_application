@@ -54,52 +54,31 @@ jobs:
         if: always()
         run: |
           if [ ! -f gitleaks-report.json ]; then
-            echo "No report generated."
+            echo "# Gitleaks Summary" >> $GITHUB_STEP_SUMMARY
+            echo "No report generated." >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
 
           COUNT=$(jq length gitleaks-report.json)
 
           if [ "$COUNT" -eq 0 ]; then
-            {
-              echo "# ✅ Gitleaks Scan"
-              echo ""
-              echo "No secrets detected."
-            } >> $GITHUB_STEP_SUMMARY
+            echo "# ✅ Gitleaks Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No secrets detected." >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
 
           {
-            echo "# 🛑 Gitleaks detected secrets 🛑"
+            echo "# 🚨 Gitleaks detected secrets 🚨"
             echo ""
-            echo "<table>"
-            echo "<tr>"
-            echo "<th>Rule ID</th>"
-            echo "<th>Commit</th>"
-            echo "<th>Secret URL</th>"
-            echo "<th>Start Line</th>"
-            echo "<th>Author</th>"
-            echo "<th>Date</th>"
-            echo "<th>Email</th>"
-            echo "<th>File</th>"
-            echo "</tr>"
-          } >> $GITHUB_STEP_SUMMARY
+            echo "| Rule ID | Commit | File | Start Line |"
+            echo "|---------|--------|------|------------|"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          jq -r --arg REPO "${{ github.server_url }}/${{ github.repository }}" '
+          jq -r '
             .[] |
-            "<tr>" +
-            "<td>" + (.RuleID // "-") + "</td>" +
-            "<td><a href=\"" + $REPO + "/commit/" + .Commit + "\it[0:7]) + "</a></td>" +
-            "<td>\"" "/blob/" + .Commit + "/" + .File + "#L" + (.StartLine|tostring) + "\">View Secret</a></td>" +
-            "<td>" + (.StartLine|tostring) + "</td>" +
-            "<td>" + (.Author // "-") + "</td>" +
-            "<td>" + (.Date // "-") + "</td>" +
-            "<td>" + (.Email // "-") + "</td>" +
-            "<td>" + (.File // "-") + "</td>" +
-            "</tr>"
-          ' gitleaks-report.json >> $GITHUB_STEP_SUMMARY
-
-          echo "</table>" >> $GITHUB_STEP_SUMMARY
+            "| \(.RuleID // "N/A") | \(.Commit[0:7]) | \(.File // "N/A") | \(.StartLine // "N/A") |"
+          ' gitleaks-report.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Report
         if: always()
@@ -111,6 +90,11 @@ jobs:
       - name: Fail Workflow If Secrets Found
         if: always()
         run: |
+          if [ ! -f gitleaks-report.json ]; then
+            echo "No report file found."
+            exit 0
+          fi
+
           COUNT=$(jq length gitleaks-report.json)
 
           if [ "$COUNT" -gt 0 ]; then
