@@ -1,30 +1,11 @@
-title = "Common Gitleaks Config"
+title = "gitleaks config"
 
-[allowlist]
-paths = [
-  '''target/''',
-  '''build/''',
-  '''.git/''',
-  '''node_modules/'''
-]
 
 [[rules]]
-id = "config-password"
-description = "Hardcoded password in configuration file"
-
-regex = '''(?im)^(?!\s*(#|//)).*\b(password|passwd|pwd)\b\s*[:=]\s*([^\s#]+)'''
-secretGroup = 3
-
-keywords = [
-  "password",
-  "passwd",
-  "pwd"
-]
-
-[rules.allowlist]
-regexes = [
-  '''MVNW_PASSWORD''',
-  '''@SET MVNW_PASSWORD''',
-  '''has-password''',
-  '''password\s[^\s*[:=]\s*["']?\*\}["']?'''
-]
+id = "spring-properties-password"
+description = "Detected plain-text password assignment in application configuration"
+# Matches keywords, spaces, assignment symbols (= or :), and the target secret string
+regex = '''(?i)(password|passwd|db_password|datasource\.password)\s*[:=]\s*([^\s]+)'''
+secretGroup = 2
+keywords = ["password", "passwd", "datasource.password"]
+name: Gitleaks Scan
