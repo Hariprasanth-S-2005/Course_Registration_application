@@ -1,11 +1,21 @@
-title = "gitleaks config"
+title = "Common Gitleaks Config"
 
+[allowlist]
+paths = [
+  '''target/''',
+  '''build/''',
+  '''node_modules/'''
+]
 
 [[rules]]
-id = "spring-properties-password"
-description = "Detected plain-text password assignment in application configuration"
-# Matches keywords, spaces, assignment symbols (= or :), and the target secret string
-regex = '''(?i)(password|passwd|db_password|datasource\.password)\s*[:=]\s*([^\s]+)'''
-secretGroup = 2
-keywords = ["password", "passwd", "datasource.password"]
-name: Gitleaks Scan
+id = "config-password"
+description = "Detect hardcoded passwords in configuration files"
+
+regex = '''(?im)^(?!\s*(#|//)).*\b(password|passwd|pwd)\b\s*[:=]\s*([^\s#]+)'''
+secretGroup = 3
+
+keywords = [
+  "password",
+  "passwd",
+  "pwd"
+]
