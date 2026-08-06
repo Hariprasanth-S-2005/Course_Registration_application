@@ -8,10 +8,9 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 concurrency:
-  group: gitleaks-${{ github.ref }}
+  group: gitleaks-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,62 +19,104 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
+    env:
+      GITLEAKS_VERSION: "8.21.2"
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
-        id: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
-          GITLEAKS_ENABLE_SUMMARY: false
-
-      - name: Generate JSON Report
-        if: always()
+      - name: Install Gitleaks
         run: |
-          gitleaks detect \
-            --source . \
-            --report-format json \
-            --report-path gitleaks-report.json
+          set -euo pipefail
 
-      - name: Create Step Summary
-        if: always()
+          curl -sSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o gitleaks.tar.gz
+
+          tar -xzf gitleaks.tar.gz
+
+          chmod +x gitleaks
+
+          sudo mv gitleaks /usr/local/bin/
+
+          gitleaks version
+
+      - name: Run Gitleaks Scan
         run: |
-          if [ ! -f gitleaks-report.json ]; then
-            echo "# Gitleaks Summary" >> $GITHUB_STEP_SUMMARY
-            echo "No report generated." >> $GITHUB_STEP_SUMMARY
-            exit 0
+          set +e
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "Scanning latest PR commit only..."
+
+            gitleaks git \
+              --log-opts="-1 ${{ github.event.pull_request.head.sha }}" \
+              --report-format json \
+              --report-path gitleaks-report.json
+          else
+            echo "Scanning complete repository history..."
+
+            gitleaks git \
+              --report-format json \
+              --report-path gitleaks-report.json
           fi
 
+          EXIT_CODE=$?
+
+          if [ ! -f gitleaks-report.json ]; then
+            echo "[]" > gitleaks-report.json
+          fi
+
+          exit 0
+
+      - name: Generate Summary
+        if: always()
+        run: |
           COUNT=$(jq length gitleaks-report.json)
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "# ✅ Gitleaks Summary" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "No secrets detected." >> $GITHUB_STEP_SUMMARY
+            {
+              echo "# ✅ Gitleaks Summary"
+              echo ""
+              echo "No secrets detected."
+            } >> "$GITHUB_STEP_SUMMARY"
+
             exit 0
           fi
 
           {
             echo "# 🚨 Gitleaks Findings"
             echo ""
-            echo "| Rule ID | File | Line |"
-            echo "|---------|------|------|"
+            echo "| Rule ID | Commit | File | Line |"
+            echo "|---------|--------|------|------|"
           } >> "$GITHUB_STEP_SUMMARY"
 
           jq -r '
             .[] |
-            "| \(.RuleID // "N/A") | \(.File // "N/A") | \(.StartLine // "N/A") |"
+            "| \(.RuleID // "N/A") | \(.Commit[0:7] // "N/A") | \(.File // "N/A") | \(.StartLine // "N/A") |"
           ' gitleaks-report.json >> "$GITHUB_STEP_SUMMARY"
 
+          echo ""
+          echo "Detected $COUNT secret(s)"
+
       - name: Upload Report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gitleaks-report
           path: gitleaks-report.json
           retention-days: 7
+
+      - name: Fail if Secrets Found
+        if: always()
+        run: |
+          COUNT=$(jq length gitleaks-report.json)
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "❌ $COUNT secret(s) detected."
+            exit 1
+          fi
+
+          echo "✅ No secrets detected."
