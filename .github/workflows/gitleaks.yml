@@ -10,18 +10,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: gitleaks-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: gitleaks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true   # stale scans on force-pushed/superseded commits get cancelled instead of piling up
 
 jobs:
   gitleaks:
-    name: Secret Scan
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-
+    runs-on: ubuntu-latest
     env:
       GITLEAKS_VERSION: "8.21.2"
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -31,76 +27,86 @@ jobs:
       - name: Install Gitleaks
         run: |
           set -euo pipefail
-
           curl -sSL \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             -o gitleaks.tar.gz
-
           tar -xzf gitleaks.tar.gz
-
           chmod +x gitleaks
-
           sudo mv gitleaks /usr/local/bin/
-
           gitleaks version
 
-      - name: Run Gitleaks Scan
+      # FIX: no longer uses continue-on-error. Instead we capture gitleaks'
+      # actual exit code ourselves, so a genuine tool crash (exit code other
+      # than 0 or 1) is distinguishable from "0 leaks" or "leaks found" --
+      # and gets treated as a hard failure, not a silent pass. --redact
+      # keeps the matched secret text out of both the console log AND the
+      # JSON report, so nothing sensitive ends up in the uploaded artifact.
+      - name: Run Gitleaks
+        id: scan
         run: |
-          set +e
-
+          set +e   # allow us to capture the exit code instead of the job dying here
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "Scanning latest PR commit only..."
-
-            gitleaks git \
-              --log-opts="-1 ${{ github.event.pull_request.head.sha }}" \
+            gitleaks detect \
+              --source . \
+              --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" \
               --report-format json \
-              --report-path gitleaks-report.json
+              --report-path gitleaks-report.json \
+              --redact
           else
-            echo "Scanning complete repository history..."
-
-            gitleaks git \
+            gitleaks detect \
+              --source . \
               --report-format json \
-              --report-path gitleaks-report.json
+              --report-path gitleaks-report.json \
+              --redact
           fi
+          exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          set -e
 
-          EXIT_CODE=$?
-
-          if [ ! -f gitleaks-report.json ]; then
-            echo "[]" > gitleaks-report.json
-          fi
-
-          exit 0
+          case "$exit_code" in
+            0) echo "Gitleaks: no leaks found." ;;
+            1) echo "Gitleaks: leaks found." ;;
+            *)
+              echo "::error::Gitleaks exited with unexpected code $exit_code -- treat as a tool failure, NOT a clean scan."
+              ;;
+          esac
 
       - name: Generate Summary
         if: always()
         run: |
-          COUNT=$(jq length gitleaks-report.json)
-
-          if [ "$COUNT" -eq 0 ]; then
+          if [ ! -f gitleaks-report.json ]; then
             {
-              echo "# ✅ Gitleaks Summary"
+              echo "# ⚠️ Gitleaks Summary"
               echo ""
-              echo "No secrets detected."
+              echo "No report file was produced (gitleaks exit code: ${{ steps.scan.outputs.exit_code }})."
+              echo "This means the scan did NOT complete normally -- treat this run as FAILED, not clean."
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
+          COUNT=$(jq length gitleaks-report.json)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "# ✅ Gitleaks Summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No secrets detected." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           {
-            echo "# 🚨 Gitleaks Findings"
+            echo "# 🚨 Gitleaks detected secrets 🚨"
             echo ""
-            echo "| Rule ID | Commit | File | Line |"
-            echo "|---------|--------|------|------|"
+            echo "| Rule ID | Commit | File | Start Line |"
+            echo "|---------|--------|------|------------|"
           } >> "$GITHUB_STEP_SUMMARY"
-
           jq -r '
             .[] |
-            "| \(.RuleID // "N/A") | \(.Commit[0:7] // "N/A") | \(.File // "N/A") | \(.StartLine // "N/A") |"
+            "| \(.RuleID // "N/A") | \(.Commit[0:7]) | \(.File // "N/A") | \(.StartLine // "N/A") |"
           ' gitleaks-report.json >> "$GITHUB_STEP_SUMMARY"
 
-          echo ""
-          echo "Detected $COUNT secret(s)"
-
+      # Short retention on purpose: this report can contain file paths,
+      # commit SHAs, and rule metadata pointing at exactly where a secret
+      # was found. Even with --redact hiding the secret VALUE itself,
+      # there's no reason for this to linger for the default 90 days.
       - name: Upload Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,15 +114,35 @@ jobs:
           name: gitleaks-report
           path: gitleaks-report.json
           retention-days: 7
+          if-no-files-found: warn
 
-      - name: Fail if Secrets Found
+      # FIX: fails on ANY non-zero/non-clean outcome, including a missing
+      # report (tool crash) -- previously a missing report silently
+      # passed (exit 0). Now:
+      #   exit_code == 0            -> pass
+      #   exit_code == 1            -> fail (leaks found)
+      #   anything else / no report -> fail (tool error, treated as failed
+      #                                 scan, NOT a clean pass)
+      - name: Fail Workflow If Secrets Found Or Scan Failed
         if: always()
         run: |
-          COUNT=$(jq length gitleaks-report.json)
+          EXIT_CODE="${{ steps.scan.outputs.exit_code }}"
 
-          if [ "$COUNT" -gt 0 ]; then
+          if [ -z "$EXIT_CODE" ]; then
+            echo "❌ Gitleaks step produced no exit code at all -- treating as a failed run."
+            exit 1
+          fi
+
+          if [ "$EXIT_CODE" = "0" ] && [ -f gitleaks-report.json ]; then
+            echo "✅ No secrets detected."
+            exit 0
+          fi
+
+          if [ "$EXIT_CODE" = "1" ]; then
+            COUNT=$(jq length gitleaks-report.json 2>/dev/null || echo "unknown")
             echo "❌ $COUNT secret(s) detected."
             exit 1
           fi
 
-          echo "✅ No secrets detected."
+          echo "❌ Gitleaks did not complete a clean scan (exit code: $EXIT_CODE). Failing closed."
+          exit 1
