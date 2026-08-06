@@ -31,5 +31,7 @@ jobs:
             --source . \
             --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" \
             --redact \
+            --report-format json \
+            --report-path gitleaks-report.json \
             --exit-code 1
  
