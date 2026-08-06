@@ -4,7 +4,6 @@ on:
   pull_request:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
@@ -18,7 +17,7 @@ jobs:
       GITLEAKS_VERSION: "8.21.2"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -35,17 +34,88 @@ jobs:
 
           gitleaks version
 
-      - name: Run Gitleaks (PR Scan)
-        if: github.event_name == 'pull_request'
+      - name: Run Gitleaks
+        continue-on-error: true
         run: |
-          gitleaks detect \
-            --source . \
-            --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" \
-            --exit-code 1
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            gitleaks detect \
+              --source . \
+              --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" \
+              --report-format json \
+              --report-path gitleaks-report.json
+          else
+            gitleaks detect \
+              --source . \
+              --report-format json \
+              --report-path gitleaks-report.json
+          fi
 
-      - name: Run Gitleaks (Manual Scan)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Generate Summary
+        if: always()
         run: |
-          gitleaks detect \
-            --source . \
-            --exit-code 1
+          if [ ! -f gitleaks-report.json ]; then
+            echo "No report generated."
+            exit 0
+          fi
+
+          COUNT=$(jq length gitleaks-report.json)
+
+          if [ "$COUNT" -eq 0 ]; then
+            {
+              echo "# ✅ Gitleaks Scan"
+              echo ""
+              echo "No secrets detected."
+            } >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          {
+            echo "# 🛑 Gitleaks detected secrets 🛑"
+            echo ""
+            echo "<table>"
+            echo "<tr>"
+            echo "<th>Rule ID</th>"
+            echo "<th>Commit</th>"
+            echo "<th>Secret URL</th>"
+            echo "<th>Start Line</th>"
+            echo "<th>Author</th>"
+            echo "<th>Date</th>"
+            echo "<th>Email</th>"
+            echo "<th>File</th>"
+            echo "</tr>"
+          } >> $GITHUB_STEP_SUMMARY
+
+          jq -r --arg REPO "${{ github.server_url }}/${{ github.repository }}" '
+            .[] |
+            "<tr>" +
+            "<td>" + (.RuleID // "-") + "</td>" +
+            "<td><a href=\"" + $REPO + "/commit/" + .Commit + "\it[0:7]) + "</a></td>" +
+            "<td>\"" "/blob/" + .Commit + "/" + .File + "#L" + (.StartLine|tostring) + "\">View Secret</a></td>" +
+            "<td>" + (.StartLine|tostring) + "</td>" +
+            "<td>" + (.Author // "-") + "</td>" +
+            "<td>" + (.Date // "-") + "</td>" +
+            "<td>" + (.Email // "-") + "</td>" +
+            "<td>" + (.File // "-") + "</td>" +
+            "</tr>"
+          ' gitleaks-report.json >> $GITHUB_STEP_SUMMARY
+
+          echo "</table>" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+
+      - name: Fail Workflow If Secrets Found
+        if: always()
+        run: |
+          COUNT=$(jq length gitleaks-report.json)
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "❌ $COUNT secret(s) detected."
+            exit 1
+          fi
+
+          echo "✅ No secrets detected."
