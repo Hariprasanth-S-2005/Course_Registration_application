@@ -3,6 +3,7 @@ function showCourses(){
     .then((response) => response.json())
     .then((courses) => {
         const dataTable = document.getElementById("coursetable")
+        const password = "MySecretPassword123!";
 
         courses.forEach(course => {
             var row = `<tr>
